@@ -16,5 +16,5 @@ Official links
 
 Below is a series of assets that we are developing for the game and open-sourcing for the community:
 
-- [Sol.Unity](https://github.com/garbles-dev/Sol.Unity): Solana's .NET 2.0 SDK and integration library for Unity.
+- [Solana.Unity](https://github.com/garbles-dev/Solana.Unity): Solana's .NET 2.0 SDK and integration library for Unity.
 - [Solana Unity SDK](https://github.com/garbles-dev/unity-solana-wallet): Open-Source Unity-Solana Wallet with NFT support.
