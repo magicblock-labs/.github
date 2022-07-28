@@ -1,4 +1,4 @@
-![Garbles hero](https://i.imgur.com/BHqcLzg.jpg)
+![Garbles hero](https://i.imgur.com/ZhNGypS.png)
 
 
 ## **Welcome to the world of Garbles!** 🧙
@@ -16,5 +16,5 @@ Official links
 
 Below is a series of assets that we are developing for the game and open-sourcing for the community:
 
-- [Solana.Unity](https://github.com/garbles-dev/Solana.Unity): Solana's .NET 2.0 SDK and integration library for Unity.
-- [Solana Unity SDK](https://github.com/garbles-dev/unity-solana-wallet): Open-Source Unity-Solana Wallet with NFT support.
+- [Solana.Unity Core](https://github.com/garbles-labs/Solana.Unity-Core): Solana's .NET 2.0 SDK integration library for Unity.
+- [Solana.Unity SDK](https://github.com/garbles-labs/Solana.Unity-SDK): Open-Source Unity-Solana Wallet with NFT support.
