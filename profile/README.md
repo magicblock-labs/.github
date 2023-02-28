@@ -1,4 +1,4 @@
-![Magicblock](<blockquote class="imgur-embed-pub" lang="en" data-id="a/chyzwOh" data-context="false" ><a href="//imgur.com/a/chyzwOh"></a></blockquote><script async src="//s.imgur.com/min/embed.js" charset="utf-8"></script>)
+![Magicblock](https://ibb.co/17mtj5S)
 
 
 ## **Magicblock** 🟦✨
