@@ -1,20 +1,19 @@
-![Garbles hero](https://i.imgur.com/ZhNGypS.png)
+![Magicblock](https://imgur.com/a/chyzwOh)
 
 
-## **Welcome to the world of Garbles!** 🧙
+## **Magicblock** 🟦✨
 
-Trash has become so abundant on the planet that humans don't know how to store it anymore. Luckily for us, a group of smart scientists (we call them Cleanetist) has found a way to cultivate goofy creatures that can help us!
- 
-Garbles are cute, clumsy creatures that originate from garbage and love eating it! Help them dove into our dumpsters and gobble up every plastic bottle they can find! Assemble an army of lovable Garbles and embark on a journey to populate the planet...while cleaning it!
-Official links
+Magicblock is a web3 studio building on-chain composable games for the mass mobile market. We believe in open-source and in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
 
-- Website: https://www.garbles.fun  
+This Github hosts all of our open source experiments and production-ready tools.
+
+- Website: https://www.magicblock.gg
 - Discord: https://discord.gg/yKvddrZ25u 
-- Twitter: https://twitter.com/garblesfun
+- Twitter: https://twitter.com/magicblock
 
-## 👩‍💻 Open-Sourcing & Giveback
+## 👩‍💻 Projects we support:
 
-Below is a series of assets that we are developing for the game and open-sourcing for the community:
+Below is a series of assets that we are developing and maintaining, avilable in open-source to the game community:
 
 - [Solana.Unity Core](https://github.com/garbles-labs/Solana.Unity-Core): Solana's .NET 2.0 SDK integration library for Unity.
 - [Solana.Unity SDK](https://github.com/garbles-labs/Solana.Unity-SDK): Open-Source Unity-Solana Wallet with NFT support.
