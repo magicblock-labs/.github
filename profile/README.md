@@ -1,4 +1,4 @@
-![Magicblock](<a href="https://ibb.co/17mtj5S"><img src="https://i.ibb.co/4KVn3GQ/Github-readme-img.png" alt="Github-readme-img" border="0"></a>)
+<a href="https://ibb.co/17mtj5S"><img src="https://i.ibb.co/4KVn3GQ/Github-readme-img.png" alt="Github-readme-img" border="0"></a>
 
 
 ## **Magicblock** 🟦✨
