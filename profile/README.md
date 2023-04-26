@@ -17,3 +17,5 @@ Below is a series of assets that we are developing and maintaining, avilable in 
 
 - [Solana.Unity Core](https://github.com/garbles-labs/Solana.Unity-Core): Solana's .NET 2.0 SDK integration library for Unity.
 - [Solana.Unity SDK](https://github.com/garbles-labs/Solana.Unity-SDK): Open-Source Solana SDK for Unity. 
+- [Solana.Unity Metaplex](https://github.com/garbles-labs/Solana.Unity.Metaplex): Open-Source Metaplex SDK for Unity. 
+- [Solana.Unity Anchor](https://github.com/magicblock-labs/Solana.Unity.Anchor): Unity C# Client code generation tools for Solana Anchor programs. 
