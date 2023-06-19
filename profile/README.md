@@ -3,7 +3,7 @@
 
 ## **Magicblock** 🟦✨
 
-Magicblock is a web3 studio and infrastructure provider for composable, on-chain mobile games. We believe in open-source, making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
+Magicblock is an infrastructure provider for composable, on-chain mobile games. We believe in open-source, in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
 
 This Github hosts all our open-source experiments and production-ready tools.
 
