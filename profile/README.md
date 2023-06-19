@@ -1,7 +1,7 @@
 <a href="https://ibb.co/WxKgrvh"><img width="100%" src="https://i.ibb.co/Fx7gQ4r/Github-readme-img-1.png" alt="Github-readme-img-1" border="0"></a>
 
 
-## **Magicblock** 🟦✨
+## **Magicblock** ✨
 
 Magicblock is an infrastructure provider for composable, on-chain mobile games. We believe in open-source, in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
 
