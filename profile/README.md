@@ -3,7 +3,7 @@
 
 ## **Magicblock** ✨
 
-Magicblock is an infrastructure provider for composable, on-chain mobile games. We believe in open-source, in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
+Magicblock is an framework for on-chain games on Solana/SVM. We believe in open-source, in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
 
 This Github hosts all our open-source experiments and production-ready tools.
 
