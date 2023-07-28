@@ -3,7 +3,7 @@
 
 ## **Magicblock** ✨
 
-Magicblock is an framework for on-chain games on Solana/SVM. We believe in open-source, in making no compromise between composabliity/UX and we are deeply committed to bring on-chain games into the mainstream. 
+Magicblock is a framework for on-chain games on Solana/SVM. We believe in open-source, in making no compromise between composability/UX and we are deeply committed to bringing on-chain games into the mainstream. 
 
 This Github hosts all our open-source experiments and production-ready tools.
 
@@ -13,7 +13,7 @@ This Github hosts all our open-source experiments and production-ready tools.
 
 ## 👩‍💻 Projects we support:
 
-Below is a series of assets that we are developing and maintaining, avilable in open-source for the gaming community:
+Below is a series of assets that we are developing and maintaining, available in open-source for the gaming community:
 
 - [Solana.Unity Core](https://github.com/garbles-labs/Solana.Unity-Core): Solana's .NET 2.0 SDK integration library for Unity.
 - [Solana.Unity SDK](https://github.com/garbles-labs/Solana.Unity-SDK): Open-Source Solana SDK for Unity. 
