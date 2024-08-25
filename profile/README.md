@@ -8,7 +8,7 @@ Magicblock is a framework for on-chain games on Solana/SVM. We believe in open-s
 This Github hosts all our open-source experiments and production-ready tools.
 
 - Website: https://www.magicblock.gg
-- Discord: https://discord.gg/yKvddrZ25u 
+- Discord: https://discord.gg/yKvddrZ25u
 - Twitter: https://twitter.com/magicblock
 
 ## 👩‍💻 Projects we support:
