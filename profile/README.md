@@ -1,15 +1,16 @@
-<a href="https://ibb.co/WxKgrvh"><img width="100%" src="https://i.ibb.co/Fx7gQ4r/Github-readme-img-1.png" alt="Github-readme-img-1" border="0"></a>
+<a href="https://ibb.co/VpPv8Fkt"><img width="100%" src="https://i.ibb.co/k6WhFLPx/github-banner.png" alt="github-banner" border="0"></a>
 
 
-## **Magicblock** ✨
+## **MagicBlock** ✨
 
-Magicblock is a framework for on-chain games on Solana/SVM. We believe in open-source, in making no compromise between composability/UX and we are deeply committed to bringing on-chain games into the mainstream. 
+MagicBlock is a real-time engine seamlessly integrated with Solana. It provides ultra-low latency, on-demand runtimes, and elastic scalability for fully onchain applications. Built for developers, MagicBlock delivers an unmatched combination of speed, composability, and scalability, ensuring that decentralized applications can achieve Web2-level performance without sacrificing the benefits of Web3. With cutting-edge ephemeral rollup technology, MagicBlock enables zero-latency, high-throughput transactions, empowering builders to create the next generation of onchain experiences across gaming, DeFi, and beyond.
 
-This Github hosts all our open-source experiments and production-ready tools.
+This Github hosts all our open-source code and production-ready tools.
 
-- Website: https://www.magicblock.gg
+- Website: https://www.magicblock.xyz
 - Discord: https://discord.gg/yKvddrZ25u 
 - Twitter: https://twitter.com/magicblock
+- https://www.linkedin.com/company/magicblock
 
 ## 👩‍💻 Projects we support:
 
