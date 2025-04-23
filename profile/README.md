@@ -1,5 +1,4 @@
-<a href="https://ibb.co/VpPv8Fkt"><img width="100%" src="https://i.ibb.co/k6WhFLPx/github-banner.png" alt="github-banner" border="0"></a>
-
+<a href="https://ibb.co/V0qL4TZj"><img width="100%" src="https://i.ibb.co/9mrp5WL8/Twitter-Banner.png" alt="Twitter-Banner" border="0"></a>
 
 ## **MagicBlock** ✨
 
