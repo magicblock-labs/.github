@@ -1,0 +1,206 @@
+name: Magic Lab Project Automation
+
+on:
+  workflow_call:
+    secrets:
+      ADD_TO_PROJECT_PAT:
+        description: Token used to update Magic Lab and close linked issues
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  PROJECT_URL: https://github.com/orgs/magicblock-labs/projects/19
+  PRIORITY_FIELD_ID: "21753053"
+
+jobs:
+  add-to-project:
+    name: Add to GitHub Project
+    if: >-
+      github.event.action == 'opened' ||
+      github.event.action == 'reopened' ||
+      github.event.action == 'transferred' ||
+      github.event.action == 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add item to Magic Lab
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: ${{ env.PROJECT_URL }}
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+
+  assign-author:
+    name: Assign unassigned item to its author
+    if: github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign author
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const item = context.payload.issue ?? context.payload.pull_request;
+
+            if (item.assignees?.length) {
+              core.info(`Item already has ${item.assignees.length} assignee(s)`);
+              return;
+            }
+
+            const author = item.user;
+            if (!author || author.type === 'Bot' || author.login.endsWith('[bot]')) {
+              core.info('Skipping assignment because the item author is a bot');
+              return;
+            }
+
+            try {
+              await github.rest.issues.addAssignees({
+                ...context.repo,
+                issue_number: item.number,
+                assignees: [author.login],
+              });
+            } catch (error) {
+              if (error.status === 422) {
+                core.warning(`Cannot assign ${author.login}: ${error.message}`);
+                return;
+              }
+              throw error;
+            }
+
+  sync-priority:
+    name: Sync priority label to issue field
+    if: >-
+      github.event_name == 'issues' &&
+      (github.event.action == 'opened' ||
+       github.event.action == 'labeled' ||
+       github.event.action == 'unlabeled')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: priority-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Set Priority from P0-P3 label
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PRIORITY_FIELD_ID: ${{ env.PRIORITY_FIELD_ID }}
+        with:
+          script: |
+            const priorities = [
+              ['p0', 'Urgent'],
+              ['p1', 'High'],
+              ['p2', 'Medium'],
+              ['p3', 'Low'],
+            ];
+            const labels = new Set(
+              context.payload.issue.labels.map(label =>
+                (typeof label === 'string' ? label : label.name).toLowerCase()
+              )
+            );
+            const changedLabel = context.payload.label?.name?.toLowerCase();
+            const priorityLabels = new Set(priorities.map(([label]) => label));
+
+            if (context.payload.action !== 'opened' && !priorityLabels.has(changedLabel)) {
+              core.info(`Label ${changedLabel} does not control Priority`);
+              return;
+            }
+
+            const selected = priorities.find(([label]) => labels.has(label));
+            const fieldId = Number(process.env.PRIORITY_FIELD_ID);
+            const route = '/repos/{owner}/{repo}/issues/{issue_number}/issue-field-values';
+            const parameters = {
+              ...context.repo,
+              issue_number: context.payload.issue.number,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            };
+
+            if (selected) {
+              const [, value] = selected;
+              await github.request(`POST ${route}`, {
+                ...parameters,
+                issue_field_values: [{ field_id: fieldId, value }],
+              });
+              core.info(`Set Priority to ${value}`);
+              return;
+            }
+
+            if (context.payload.action !== 'unlabeled') {
+              core.info('No priority label is set; leaving Priority unchanged');
+              return;
+            }
+
+            try {
+              await github.request(`DELETE ${route}/{issue_field_id}`, {
+                ...parameters,
+                issue_field_id: fieldId,
+              });
+              core.info('Cleared Priority because no P0-P3 label remains');
+            } catch (error) {
+              if (error.status === 404) {
+                core.info('Priority was already empty');
+                return;
+              }
+              throw error;
+            }
+
+  close-linked-issues:
+    name: Close linked issues after merge
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close linked issues
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          script: |
+            const result = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 100) {
+                      nodes {
+                        number
+                        state
+                        repository {
+                          name
+                          owner {
+                            login
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, {
+              ...context.repo,
+              number: context.payload.pull_request.number,
+            });
+
+            const issues = result.repository.pullRequest.closingIssuesReferences.nodes;
+            if (!issues.length) {
+              core.info('The merged pull request has no linked issues');
+              return;
+            }
+
+            for (const issue of issues) {
+              if (issue.state !== 'OPEN') {
+                core.info(`${issue.repository.owner.login}/${issue.repository.name}#${issue.number} is already closed`);
+                continue;
+              }
+
+              await github.rest.issues.update({
+                owner: issue.repository.owner.login,
+                repo: issue.repository.name,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              core.info(`Closed ${issue.repository.owner.login}/${issue.repository.name}#${issue.number}`);
+            }
