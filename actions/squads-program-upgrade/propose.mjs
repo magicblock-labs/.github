@@ -130,11 +130,10 @@ function verifyIxs() {
 
 // --- sending ----------------------------------------------------------------
 
-async function buildTx(instructions) {
-  const latest = await connection.getLatestBlockhash();
+function signedTx(instructions, recentBlockhash) {
   const message = new TransactionMessage({
     payerKey: proposer.publicKey,
-    recentBlockhash: latest.blockhash,
+    recentBlockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: Number(env("COMPUTE_UNIT_PRICE")) }),
       ...instructions,
@@ -142,14 +141,21 @@ async function buildTx(instructions) {
   }).compileToV0Message();
   const tx = new VersionedTransaction(message);
   tx.sign([proposer]);
-  return { tx, latest };
+  return tx;
 }
 
-function serializedSize(tx) {
+async function buildTx(instructions) {
+  const latest = await connection.getLatestBlockhash();
+  return { tx: signedTx(instructions, latest.blockhash), latest };
+}
+
+function serializedSize(instructions) {
   try {
-    return tx.serialize().length;
-  } catch {
-    return Infinity; // web3.js throws once the encoding overruns a packet
+    // Any blockhash serializes to the same 32 bytes.
+    return signedTx(instructions, PublicKey.default.toBase58()).serialize().length;
+  } catch (err) {
+    if (err instanceof RangeError) return Infinity; // encoding overran a packet
+    throw err;
   }
 }
 
@@ -195,13 +201,16 @@ async function propose() {
   const bundle = [upgradeIx(programData, buffer, spill)];
   if (env("WRITE_VERIFY_PDA") === "true") bundle.push(...verifyIxs());
 
-  // 1. The transaction and its proposal are created atomically, so neither can
-  //    exist without the other. Together they must fit in one packet.
+  // 1. The buffer handover, the vault transaction and its proposal land in one
+  //    transaction: if any part fails (say a stale index on a shared
+  //    multisig), the proposer keeps the buffer and can close it. Together
+  //    they must fit in one packet.
   const nextIndex = async () => {
     const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
     return BigInt(ms.transactionIndex.toString()) + 1n;
   };
-  const proposalIxs = (transactionIndex) => [
+  const proposalIxs = (transactionIndex, memo) => [
+    setBufferAuthorityIx(buffer, proposer.publicKey, vaultPda),
     multisig.instructions.vaultTransactionCreate({
       multisigPda,
       transactionIndex,
@@ -213,7 +222,7 @@ async function propose() {
         recentBlockhash: PublicKey.default.toBase58(), // replaced by Squads at execution
         instructions: bundle,
       }),
-      memo: env("PROPOSAL_NAME"),
+      memo,
     }),
     multisig.instructions.proposalCreate({
       multisigPda,
@@ -222,7 +231,15 @@ async function propose() {
     }),
   ];
   // The index is a fixed-width u64, so its value does not change the size.
-  const size = serializedSize((await buildTx(proposalIxs(await nextIndex()))).tx);
+  const sizeWith = (memo) => serializedSize(proposalIxs(0n, memo));
+  let memo = env("PROPOSAL_NAME");
+  let size = sizeWith(memo);
+  if (size > PACKET_SIZE) {
+    // The memo is cosmetic; the proposal is not.
+    console.log(`::warning::Proposal name dropped to fit the ${PACKET_SIZE}-byte packet limit`);
+    memo = undefined;
+    size = sizeWith(memo);
+  }
   if (size > PACKET_SIZE) {
     fail(`Proposal transaction is ${size} bytes, over the ${PACKET_SIZE}-byte packet limit`);
   }
@@ -253,14 +270,12 @@ async function propose() {
     return;
   }
 
-  // 3. From here the buffer belongs to the vault; only a proposal can close it.
-  await send([setBufferAuthorityIx(buffer, proposer.publicKey, vaultPda)], "setBufferAuthority");
-  output("authority-transferred", "true");
-
-  // Read the index only now: another proposer on a shared multisig may have
-  // advanced it while we built, uploaded and simulated.
+  // 3. Read the index only now, so time spent uploading and simulating cannot
+  //    make it stale. From here the buffer belongs to the vault, referenced by
+  //    the proposal that can execute or close it.
   const transactionIndex = await nextIndex();
-  await send(proposalIxs(transactionIndex), "vaultTransactionCreate + proposalCreate");
+  await send(proposalIxs(transactionIndex, memo), "setBufferAuthority + vaultTransactionCreate + proposalCreate");
+  output("authority-transferred", "true");
   output("transaction-index", transactionIndex.toString());
 }
 

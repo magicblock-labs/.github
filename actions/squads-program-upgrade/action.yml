@@ -223,7 +223,6 @@ runs:
         SIZE: ${{ steps.build.outputs.size }}
         COMMIT: ${{ steps.build.outputs.commit }}
         INDEX: ${{ steps.propose.outputs.transaction-index }}
-        TRANSFERRED: ${{ steps.propose.outputs.authority-transferred }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
         rm -f "$PROPOSER_KEYPAIR_PATH"
@@ -245,8 +244,5 @@ runs:
             echo "Before approving, confirm the buffer holds this build:"
             echo
             echo "    solana-verify --url <rpc> get-buffer-hash $BUFFER   # must print $HASH"
-          elif [ "$TRANSFERRED" = "true" ]; then
-            echo
-            echo "> Buffer \`$BUFFER\` is owned by the vault but no proposal was created. Close it with a Squads proposal."
           fi
         } >> "$GITHUB_STEP_SUMMARY"
