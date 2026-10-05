@@ -1,0 +1,257 @@
+name: Squads Program Upgrade
+description: >-
+  Verifiably build a Solana program, upload it to a buffer and open a Squads v4
+  proposal that upgrades the program and records its otter-verify PDA in one
+  execution. The bundle is simulated before the proposal is created.
+
+inputs:
+  rpc-url:
+    description: RPC endpoint of the target cluster. Pass a secret.
+    required: true
+  proposer-keypair:
+    description: JSON keypair of a multisig member with Initiate permission. Pass a secret.
+    required: true
+  multisig:
+    description: Squads v4 multisig PDA whose vault is the program upgrade authority.
+    required: true
+  program-id:
+    description: Program to upgrade.
+    required: true
+  library-name:
+    description: Cargo library name of the program (target/deploy/<library-name>.so).
+    required: true
+  vault-index:
+    description: Squads vault index holding the upgrade authority.
+    default: "0"
+  mount-path:
+    description: Path to the program workspace, relative to the repository root.
+    default: ""
+  solana-version:
+    description: Solana CLI release; also selects the solana-verifiable-build image.
+    default: v3.1.5
+  solana-verify-version:
+    description: solana-verify release.
+    default: 0.4.15
+  write-verify-pda:
+    description: Bundle the otter-verify PDA write with the upgrade.
+    default: "true"
+  repository-url:
+    description: Public repository URL recorded in the otter-verify PDA.
+    default: ${{ github.server_url }}/${{ github.repository }}
+  proposal-name:
+    description: Memo attached to the Squads transaction.
+    default: Upgrade program ${{ github.sha }}
+  spill-address:
+    description: Receives the buffer's lamports on upgrade. Defaults to the proposer.
+    default: ""
+  compute-unit-price:
+    description: Priority fee in micro-lamports per compute unit.
+    default: "50000"
+  dry-run:
+    description: Build, upload and simulate, then close the buffer without proposing.
+    default: "false"
+
+outputs:
+  cluster:
+    description: Cluster detected from the RPC genesis hash.
+    value: ${{ steps.preflight.outputs.cluster }}
+  vault:
+    description: Squads vault holding the upgrade authority.
+    value: ${{ steps.preflight.outputs.vault }}
+  buffer:
+    description: Program buffer referenced by the proposal.
+    value: ${{ steps.buffer.outputs.address }}
+  executable-hash:
+    description: solana-verify hash of the built program.
+    value: ${{ steps.build.outputs.executable-hash }}
+  transaction-index:
+    description: Squads transaction index of the proposal (empty on dry run).
+    value: ${{ steps.propose.outputs.transaction-index }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        PROPOSER_KEYPAIR: ${{ inputs.proposer-keypair }}
+        SOLANA_VERSION: ${{ inputs.solana-version }}
+        SOLANA_VERIFY_VERSION: ${{ inputs.solana-verify-version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        echo "::add-mask::$RPC_URL"
+        : "${RPC_URL:?rpc-url is empty}"
+        : "${PROPOSER_KEYPAIR:?proposer-keypair is empty}"
+
+        KEYPAIR_PATH="$RUNNER_TEMP/squads-proposer.json"
+        (umask 077 && printf '%s' "$PROPOSER_KEYPAIR" > "$KEYPAIR_PATH")
+        echo "PROPOSER_KEYPAIR_PATH=$KEYPAIR_PATH" >> "$GITHUB_ENV"
+
+        sh -c "$(curl -sSfL "https://release.anza.xyz/${SOLANA_VERSION}/install")"
+        echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+        BASE="https://github.com/solana-foundation/solana-verifiable-build/releases/download/v${SOLANA_VERIFY_VERSION}"
+        curl -sSfL "$BASE/solana-verify-${SOLANA_VERIFY_VERSION}-linux" -o "$RUNNER_TEMP/solana-verify"
+        curl -sSfL "$BASE/solana-verify-${SOLANA_VERIFY_VERSION}-linux.sha256" -o "$RUNNER_TEMP/solana-verify.sha256"
+        (cd "$RUNNER_TEMP" && awk '{print $1"  solana-verify"}' solana-verify.sha256 | sha256sum -c -)
+        sudo install -m 755 "$RUNNER_TEMP/solana-verify" /usr/local/bin/solana-verify
+
+        # --ignore-scripts: dependency lifecycle hooks never run next to the keypair.
+        npm ci --prefix "$ACTION_PATH" --ignore-scripts --no-audit --no-fund
+
+    - name: Preflight
+      id: preflight
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        MULTISIG: ${{ inputs.multisig }}
+        VAULT_INDEX: ${{ inputs.vault-index }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+      run: node "${{ github.action_path }}/propose.mjs" preflight
+
+    - name: Build verifiable binary
+      id: build
+      shell: bash
+      env:
+        MOUNT_PATH: ${{ inputs.mount-path }}
+        LIBRARY_NAME: ${{ inputs.library-name }}
+        SOLANA_VERSION: ${{ inputs.solana-version }}
+        CAPACITY: ${{ steps.preflight.outputs.capacity }}
+      run: |
+        # The verify PDA records only the commit, so the build must be exactly
+        # that commit: verifiers rebuild it, not this worktree.
+        DIRTY=$(git status --porcelain --untracked-files=all)
+        if [ -n "$DIRTY" ]; then
+          echo "::error::Worktree differs from HEAD; verifiers would rebuild different source:"
+          echo "$DIRTY"
+          exit 1
+        fi
+
+        BASE_IMAGE="solanafoundation/solana-verifiable-build:${SOLANA_VERSION#v}"
+        solana-verify build ${MOUNT_PATH:+"$MOUNT_PATH"} --library-name "$LIBRARY_NAME" --base-image "$BASE_IMAGE"
+
+        SO="${MOUNT_PATH:-.}/target/deploy/${LIBRARY_NAME}.so"
+        SIZE=$(wc -c < "$SO" | tr -d ' ')
+        if [ "$SIZE" -gt "$CAPACITY" ]; then
+          echo "::error::Binary is $SIZE bytes but ProgramData holds $CAPACITY. Extend the program by at least $((SIZE - CAPACITY)) bytes first."
+          exit 1
+        fi
+
+        HASH=$(solana-verify get-executable-hash "$SO" | tail -n1)
+        {
+          echo "so=$SO"
+          echo "size=$SIZE"
+          echo "base-image=$BASE_IMAGE"
+          echo "executable-hash=$HASH"
+          echo "commit=$(git -C "${MOUNT_PATH:-.}" rev-parse HEAD)"
+        } | tee -a "$GITHUB_OUTPUT"
+
+    - name: Upload buffer
+      id: buffer
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        SO: ${{ steps.build.outputs.so }}
+        EXPECTED_HASH: ${{ steps.build.outputs.executable-hash }}
+        COMPUTE_UNIT_PRICE: ${{ inputs.compute-unit-price }}
+      run: |
+        solana program write-buffer "$SO" \
+          --url "$RPC_URL" \
+          --keypair "$PROPOSER_KEYPAIR_PATH" \
+          --use-rpc \
+          --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
+          --max-sign-attempts 50 \
+          | tee "$RUNNER_TEMP/buffer.log"
+
+        BUFFER=$(awk '/^Buffer:/ {print $2; exit}' "$RUNNER_TEMP/buffer.log")
+        : "${BUFFER:?could not parse the buffer address}"
+        echo "address=$BUFFER" >> "$GITHUB_OUTPUT"
+
+        # solana-verify reads at finalized commitment, which trails the upload:
+        # the buffer first reads as missing, then empty, then complete.
+        for _ in $(seq 1 30); do
+          BUFFER_HASH=$(solana-verify --url "$RPC_URL" get-buffer-hash "$BUFFER" 2>/dev/null | tail -n1)
+          [ "$BUFFER_HASH" = "$EXPECTED_HASH" ] && break
+          sleep 5
+        done
+        if [ "$BUFFER_HASH" != "$EXPECTED_HASH" ]; then
+          echo "::error::Buffer hash $BUFFER_HASH does not match the built binary $EXPECTED_HASH"
+          exit 1
+        fi
+
+    - name: Simulate and propose
+      id: propose
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        MULTISIG: ${{ inputs.multisig }}
+        VAULT_INDEX: ${{ inputs.vault-index }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+        BUFFER: ${{ steps.buffer.outputs.address }}
+        SPILL_ADDRESS: ${{ inputs.spill-address }}
+        WRITE_VERIFY_PDA: ${{ inputs.write-verify-pda }}
+        REPOSITORY_URL: ${{ inputs.repository-url }}
+        LIBRARY_NAME: ${{ inputs.library-name }}
+        MOUNT_PATH: ${{ inputs.mount-path }}
+        BASE_IMAGE: ${{ steps.build.outputs.base-image }}
+        COMMIT: ${{ steps.build.outputs.commit }}
+        PROPOSAL_NAME: ${{ inputs.proposal-name }}
+        COMPUTE_UNIT_PRICE: ${{ inputs.compute-unit-price }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: node "${{ github.action_path }}/propose.mjs" propose
+
+    # While the proposer still owns the buffer, reclaim its rent on dry runs,
+    # failures and cancellations. Once the vault owns it, only a Squads
+    # proposal can close it.
+    - name: Close buffer
+      if: >-
+        always() && steps.buffer.outputs.address != '' &&
+        steps.propose.outputs.authority-transferred != 'true' &&
+        (!success() || inputs.dry-run == 'true')
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        BUFFER: ${{ steps.buffer.outputs.address }}
+      run: |
+        solana program close "$BUFFER" \
+          --url "$RPC_URL" \
+          --keypair "$PROPOSER_KEYPAIR_PATH" \
+          --bypass-warning
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        CLUSTER: ${{ steps.preflight.outputs.cluster }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+        MULTISIG: ${{ inputs.multisig }}
+        VAULT: ${{ steps.preflight.outputs.vault }}
+        BUFFER: ${{ steps.buffer.outputs.address }}
+        HASH: ${{ steps.build.outputs.executable-hash }}
+        SIZE: ${{ steps.build.outputs.size }}
+        COMMIT: ${{ steps.build.outputs.commit }}
+        INDEX: ${{ steps.propose.outputs.transaction-index }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        rm -f "$PROPOSER_KEYPAIR_PATH"
+        {
+          if [ -n "$INDEX" ]; then echo "### Squads proposal #$INDEX opened"
+          elif [ "$DRY_RUN" = "true" ]; then echo "### Dry run (no proposal)"
+          else echo "### Upgrade proposal not created"; fi
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Cluster | \`${CLUSTER:-?}\` |"
+          echo "| Program | \`$PROGRAM_ID\` |"
+          echo "| Multisig / vault | \`$MULTISIG\` / \`${VAULT:-?}\` |"
+          echo "| Commit | \`${COMMIT:-?}\` |"
+          echo "| Binary | \`${SIZE:-?}\` bytes, hash \`${HASH:-?}\` |"
+          echo "| Buffer | \`${BUFFER:-none}\` |"
+          if [ -n "$INDEX" ]; then
+            echo
+            echo "Before approving, confirm the buffer holds this build:"
+            echo
+            echo "    solana-verify --url <rpc> get-buffer-hash $BUFFER   # must print $HASH"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
