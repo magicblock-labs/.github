@@ -195,27 +195,38 @@ async function propose() {
   const bundle = [upgradeIx(programData, buffer, spill)];
   if (env("WRITE_VERIFY_PDA") === "true") bundle.push(...verifyIxs());
 
-  // 1. The proposal must fit in a packet, or members could never see it.
-  const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
-  const transactionIndex = BigInt(ms.transactionIndex.toString()) + 1n;
-  const createIx = () => multisig.instructions.vaultTransactionCreate({
-    multisigPda,
-    transactionIndex,
-    creator: proposer.publicKey,
-    vaultIndex,
-    ephemeralSigners: 0,
-    transactionMessage: new TransactionMessage({
-      payerKey: vaultPda,
-      recentBlockhash: PublicKey.default.toBase58(), // replaced by Squads at execution
-      instructions: bundle,
+  // 1. The transaction and its proposal are created atomically, so neither can
+  //    exist without the other. Together they must fit in one packet.
+  const nextIndex = async () => {
+    const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+    return BigInt(ms.transactionIndex.toString()) + 1n;
+  };
+  const proposalIxs = (transactionIndex) => [
+    multisig.instructions.vaultTransactionCreate({
+      multisigPda,
+      transactionIndex,
+      creator: proposer.publicKey,
+      vaultIndex,
+      ephemeralSigners: 0,
+      transactionMessage: new TransactionMessage({
+        payerKey: vaultPda,
+        recentBlockhash: PublicKey.default.toBase58(), // replaced by Squads at execution
+        instructions: bundle,
+      }),
+      memo: env("PROPOSAL_NAME"),
     }),
-    memo: env("PROPOSAL_NAME"),
-  });
-  const size = serializedSize((await buildTx([createIx()])).tx);
+    multisig.instructions.proposalCreate({
+      multisigPda,
+      transactionIndex,
+      creator: proposer.publicKey,
+    }),
+  ];
+  // The index is a fixed-width u64, so its value does not change the size.
+  const size = serializedSize((await buildTx(proposalIxs(await nextIndex()))).tx);
   if (size > PACKET_SIZE) {
-    fail(`vaultTransactionCreate is ${size} bytes, over the ${PACKET_SIZE}-byte packet limit`);
+    fail(`Proposal transaction is ${size} bytes, over the ${PACKET_SIZE}-byte packet limit`);
   }
-  console.log(`vaultTransactionCreate size: ${size}/${PACKET_SIZE} bytes`);
+  console.log(`Proposal transaction size: ${size}/${PACKET_SIZE} bytes`);
 
   // 2. Prove the bundle executes exactly as the vault would run it, including
   //    the buffer handover and any rent the vault must pay. Signatures are
@@ -246,12 +257,10 @@ async function propose() {
   await send([setBufferAuthorityIx(buffer, proposer.publicKey, vaultPda)], "setBufferAuthority");
   output("authority-transferred", "true");
 
-  await send([createIx()], "vaultTransactionCreate");
-  await send([multisig.instructions.proposalCreate({
-    multisigPda,
-    transactionIndex,
-    creator: proposer.publicKey,
-  })], "proposalCreate");
+  // Read the index only now: another proposer on a shared multisig may have
+  // advanced it while we built, uploaded and simulated.
+  const transactionIndex = await nextIndex();
+  await send(proposalIxs(transactionIndex), "vaultTransactionCreate + proposalCreate");
   output("transaction-index", transactionIndex.toString());
 }
 

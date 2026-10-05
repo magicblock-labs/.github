@@ -6,7 +6,7 @@ Opens a Squads v4 proposal that upgrades a Solana program from a verifiable buil
 2. **Build** with `solana-verify` in the pinned `solana-verifiable-build` image, and check the binary fits the current ProgramData allocation.
 3. **Upload** the buffer and check its on-chain hash equals the build.
 4. **Simulate** the exact bundle the vault will execute: buffer handover, `Upgrade`, and the otter-verify PDA write. This includes the rent the vault pays on first verification.
-5. Only then **propose**: hand the buffer to the vault, `vaultTransactionCreate`, `proposalCreate`.
+5. Only then **propose**: hand the buffer to the vault, then `vaultTransactionCreate` and `proposalCreate` in one transaction.
 
 Members approve and execute in Squads. Upgrade and verification land atomically. If anything fails before the handover, the buffer is closed and its rent returned.
 

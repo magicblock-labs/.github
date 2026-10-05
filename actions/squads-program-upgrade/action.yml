@@ -192,13 +192,14 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
       run: node "${{ github.action_path }}/propose.mjs" propose
 
-    # While the proposer still owns the buffer, reclaim its rent on dry runs and
-    # failures. Once the vault owns it, only a Squads proposal can close it.
+    # While the proposer still owns the buffer, reclaim its rent on dry runs,
+    # failures and cancellations. Once the vault owns it, only a Squads
+    # proposal can close it.
     - name: Close buffer
       if: >-
         always() && steps.buffer.outputs.address != '' &&
         steps.propose.outputs.authority-transferred != 'true' &&
-        (failure() || inputs.dry-run == 'true')
+        (!success() || inputs.dry-run == 'true')
       shell: bash
       env:
         RPC_URL: ${{ inputs.rpc-url }}
