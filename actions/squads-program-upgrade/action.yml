@@ -119,6 +119,15 @@ runs:
         SOLANA_VERSION: ${{ inputs.solana-version }}
         CAPACITY: ${{ steps.preflight.outputs.capacity }}
       run: |
+        # The verify PDA records only the commit, so the build must be exactly
+        # that commit: verifiers rebuild it, not this worktree.
+        DIRTY=$(git status --porcelain --untracked-files=all)
+        if [ -n "$DIRTY" ]; then
+          echo "::error::Worktree differs from HEAD; verifiers would rebuild different source:"
+          echo "$DIRTY"
+          exit 1
+        fi
+
         BASE_IMAGE="solanafoundation/solana-verifiable-build:${SOLANA_VERSION#v}"
         solana-verify build ${MOUNT_PATH:+"$MOUNT_PATH"} --library-name "$LIBRARY_NAME" --base-image "$BASE_IMAGE"
 
