@@ -155,8 +155,17 @@ if (answer !== "propose") {
 if ((await connection.getBalance(signer.publicKey)) < 10_000_000) {
   fail(`${signer.publicKey.toBase58()} needs ~0.01 SOL to pay the proposal rent and fees`);
 }
-// Read the index only now: another member may have proposed while we waited.
+// Re-read now: another member may have proposed, or changed the configuration
+// the checks above were made against, while we waited.
 const latestMs = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+const snapshot = (m) => JSON.stringify({
+  threshold: m.threshold,
+  timeLock: m.timeLock,
+  members: m.members.map((x) => [x.key.toBase58(), x.permissions.mask]),
+});
+if (snapshot(latestMs) !== snapshot(ms)) {
+  fail("the multisig configuration changed while you were deciding; nothing signed. Run this again to re-check.");
+}
 const transactionIndex = BigInt(latestMs.transactionIndex.toString()) + 1n;
 const latest = await connection.getLatestBlockhash();
 const tx = new VersionedTransaction(new TransactionMessage({

@@ -134,15 +134,30 @@ async function decode(index) {
   }
 }
 
+// Account keys in v0 order: static keys, then every table's writable entries,
+// then every table's read-only entries. Unresolvable entries stay undefined.
+async function resolveKeys(msg) {
+  const writable = [];
+  const readonly = [];
+  for (const lookup of msg.addressTableLookups) {
+    const table = (await connection.getAddressLookupTable(lookup.accountKey)).value;
+    const at = (i) => table?.state.addresses[i];
+    writable.push(...[...lookup.writableIndexes].map(at));
+    readonly.push(...[...lookup.readonlyIndexes].map(at));
+  }
+  return [...msg.accountKeys, ...writable, ...readonly];
+}
+
 async function decodeVault(vaultTx) {
   const msg = vaultTx.message;
-  const keys = [...msg.accountKeys];
+  const keys = await resolveKeys(msg);
   const lines = [`vault ${vaultTx.vaultIndex} transaction by ${vaultTx.creator.toBase58()}`];
   const upgrades = [];
   const problems = [];
   if (msg.addressTableLookups.length) {
-    lines.push("uses address lookup tables: accounts resolved through them are shown as lookup#n");
+    lines.push(`uses ${msg.addressTableLookups.length} address lookup table(s), resolved below`);
   }
+  if (keys.some((k) => !k)) problems.push("some lookup-table accounts could not be resolved");
   for (const [i, ix] of msg.instructions.entries()) {
     const program = keys[ix.programIdIndex]?.toBase58() ?? `lookup#${ix.programIdIndex}`;
     const accounts = [...ix.accountIndexes].map((a) => keys[a]?.toBase58() ?? `lookup#${a}`);
@@ -152,6 +167,10 @@ async function decodeVault(vaultTx) {
     if (program === LOADER && tag === 3) {
       const [, programId, buffer, spill] = accounts;
       lines.push(`${i}. UPGRADE program ${programId}`, `   buffer ${buffer}, lamports refunded to ${spill}`);
+      if (buffer.startsWith("lookup#")) {
+        problems.push(`upgrade buffer ${buffer} could not be resolved`);
+        continue;
+      }
       const account = await connection.getAccountInfo(new PublicKey(buffer));
       if (!account) {
         problems.push(`buffer ${buffer} does not exist`);
