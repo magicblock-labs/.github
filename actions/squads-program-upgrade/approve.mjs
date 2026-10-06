@@ -121,7 +121,9 @@ function decodeVerifyParams(data) {
     const version = string();
     const gitUrl = string();
     const commit = string();
-    const args = Array.from({ length: data.readUInt32LE(take(4)) }, string);
+    const count = data.readUInt32LE(take(4));
+    if (count * 4 > data.length - offset) return null; // each string needs at least its 4-byte length
+    const args = Array.from({ length: count }, string);
     const deployedSlot = data.readBigUInt64LE(take(8));
     if (offset !== data.length) return null; // trailing bytes: not this schema
     return { version, gitUrl, commit, args, deployedSlot };
@@ -297,10 +299,17 @@ function decodeConfig(configTx) {
       case "SetRentCollector":
         lines.push(`${i}. SET RENT COLLECTOR -> ${action.newRentCollector?.toBase58?.() ?? "none"}`);
         break;
-      case "AddSpendingLimit":
-        lines.push(`${i}. ADD SPENDING LIMIT vault ${action.vaultIndex}, mint ${action.mint.toBase58()}, ` +
-          `amount ${action.amount.toString()} per ${action.period.__kind ?? action.period}`);
+      case "AddSpendingLimit": {
+        // Delegates spend without any vote, so who and where must be visible.
+        const mint = action.mint.equals(PublicKey.default) ? "SOL" : action.mint.toBase58();
+        const period = typeof action.period === "object" ? action.period.__kind : ["OneTime", "Day", "Week", "Month"][action.period];
+        lines.push(`${i}. ADD SPENDING LIMIT on vault ${action.vaultIndex}: ${action.amount.toString()} of ${mint} per ${period}`);
+        lines.push(`   spenders (no vote needed): ${action.members.map((k) => k.toBase58()).join(", ") || "none"}`);
+        lines.push(action.destinations.length
+          ? `   destinations: ${action.destinations.map((k) => k.toBase58()).join(", ")}`
+          : "   destinations: ANY address (no restriction)");
         break;
+      }
       case "RemoveSpendingLimit":
         lines.push(`${i}. REMOVE SPENDING LIMIT ${action.spendingLimit.toBase58()}`);
         break;
