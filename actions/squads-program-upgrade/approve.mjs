@@ -170,6 +170,7 @@ async function decodeVault(vaultTx) {
   const upgrades = [];
   const verifies = [];
   const problems = [];
+  const others = []; // instructions that are neither an upgrade, a verify write nor compute budget
   if (msg.addressTableLookups.length) {
     lines.push(`uses ${msg.addressTableLookups.length} address lookup table(s), resolved below`);
   }
@@ -215,9 +216,16 @@ async function decodeVault(vaultTx) {
       upgrades.push({ buffer, hash, programId });
       lines.push(`   buffer hash ${hash}`);
     } else if (program === LOADER && tag === 4) {
+      others.push(i);
       lines.push(`${i}. SET AUTHORITY of ${accounts[0]} -> ${accounts[2] ?? "none (makes it immutable)"}`);
     } else if (program === LOADER && tag === 6) {
-      lines.push(`${i}. EXTEND program ${accounts[1]} by ${data.readUInt32LE(4)} bytes`);
+      others.push(i);
+      if (data.length < 8 || accounts.length < 2) {
+        problems.push(`instruction ${i}: malformed loader Extend`);
+        lines.push(`${i}. EXTEND: MALFORMED, review manually`);
+      } else {
+        lines.push(`${i}. EXTEND program ${accounts[1]} by ${data.readUInt32LE(4)} bytes`);
+      }
     } else if (program === OTTER_VERIFY) {
       const kind = VERIFY_KINDS[data.subarray(0, 8).toString("hex")];
       const [pda, authority, target] = accounts;
@@ -227,6 +235,7 @@ async function decodeVault(vaultTx) {
         continue;
       }
       verifies.push({ i, kind, pda, authority, target });
+      if (kind === "close") others.push(i);
       const p = kind === "close" ? null : decodeVerifyParams(data);
       if (kind !== "close" && !p) problems.push(`instruction ${i}: malformed otter-verify ${kind} payload`);
       lines.push(`${i}. VERIFY PDA ${kind.toUpperCase()} for program ${target}` +
@@ -234,14 +243,19 @@ async function decodeVault(vaultTx) {
     } else if (program === COMPUTE_BUDGET) {
       lines.push(`${i}. compute budget`);
     } else {
+      others.push(i);
       lines.push(`${i}. ${program}: ${data.length} bytes of data, ${accounts.length} accounts; NOT DECODED, review manually`);
     }
+  }
+  // An upgrade proposal may contain only the upgrade, its verify record and
+  // compute budget. Anything else riding along must go in its own proposal.
+  if (upgrades.length) {
+    for (const i of others) problems.push(`instruction ${i} is not allowed in an upgrade proposal`);
   }
   // A verification record must describe a program this proposal upgrades,
   // written by this vault at the address otter-verify derives for that pair.
   const upgraded = new Set(upgrades.map((u) => u.programId));
   for (const v of verifies) {
-    if (v.kind === "close") continue;
     if (upgrades.length && !upgraded.has(v.target)) {
       problems.push(`instruction ${v.i}: verify record targets ${v.target}, which this proposal does not upgrade`);
     }
@@ -431,7 +445,13 @@ async function review(index) {
 
   header();
   const proposal = await proposalAt(index);
-  const decoded = await decode(index);
+  let decoded;
+  try {
+    decoded = await decode(index);
+  } catch (err) {
+    decoded = { kind: "undecodable", lines: [`could not decode: ${err.message}`], upgrades: [],
+      problems: ["the proposal could not be decoded; reject it or review it by other means"] };
+  }
   console.log(`\n#${index}: ${proposal ? `${proposal.status.__kind}, ${votes(proposal)}` : "no proposal"}`);
   for (const line of decoded.lines) console.log(`  ${line}`);
 
