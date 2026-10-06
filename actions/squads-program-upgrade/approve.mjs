@@ -105,21 +105,24 @@ function bufferHash(data) {
 // otter-verify initialize/update: 8-byte discriminator, then Borsh
 // { version: String, git_url: String, commit: String, args: Vec<String>, deployed_slot: u64 }.
 function decodeVerifyParams(data) {
+  let offset = 8;
+  const take = (n) => {
+    if (offset + n > data.length) throw new RangeError("truncated");
+    offset += n;
+    return offset - n;
+  };
+  const string = () => {
+    const length = data.readUInt32LE(take(4));
+    return data.toString("utf8", take(length), offset);
+  };
   try {
-    let offset = 8;
-    const string = () => {
-      const length = data.readUInt32LE(offset);
-      const value = data.toString("utf8", offset + 4, offset + 4 + length);
-      offset += 4 + length;
-      return value;
-    };
     const version = string();
     const gitUrl = string();
     const commit = string();
-    const count = data.readUInt32LE(offset);
-    offset += 4;
-    const args = Array.from({ length: count }, string);
-    return { version, gitUrl, commit, args };
+    const args = Array.from({ length: data.readUInt32LE(take(4)) }, string);
+    const deployedSlot = data.readBigUInt64LE(take(8));
+    if (offset !== data.length) return null; // trailing bytes: not this schema
+    return { version, gitUrl, commit, args, deployedSlot };
   } catch {
     return null;
   }
@@ -200,6 +203,7 @@ async function decodeVault(vaultTx) {
       }
       verifies.push({ i, kind, pda, authority, target });
       const p = kind === "close" ? null : decodeVerifyParams(data);
+      if (kind !== "close" && !p) problems.push(`instruction ${i}: malformed otter-verify ${kind} payload`);
       lines.push(`${i}. VERIFY PDA ${kind.toUpperCase()} for program ${target}` +
         (p ? `: ${p.gitUrl} @ ${p.commit}, args [${p.args.join(" ")}], solana-verify ${p.version}` : ""));
     } else if (program === COMPUTE_BUDGET) {
@@ -434,18 +438,23 @@ async function review(index) {
   if (problems.length) fail("not executing while the problems above remain");
 
   // An approved proposal only becomes executable once the timelock has passed.
-  // Squads checks the timelock current at execution, so read it fresh.
-  const { timeLock } = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda, "confirmed");
-  const approvedAt = Number((await proposalAt(index)).status.timestamp);
-  const now = await connection.getBlockTime(await connection.getSlot());
-  const readyAt = approvedAt + timeLock;
-  if (now < readyAt) {
-    console.log(`\nApproved; the ${timeLock}s timelock ends at ${new Date(readyAt * 1000).toISOString()} ` +
-      `(${readyAt - now}s from now). Run this again then to execute.`);
-    return;
-  }
+  // Squads checks the timelock current at execution, so read it fresh: once
+  // before asking, and again right before sending.
+  const timelockWait = async () => {
+    const { timeLock } = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda, "confirmed");
+    const approvedAt = Number((await proposalAt(index)).status.timestamp);
+    const now = await connection.getBlockTime(await connection.getSlot());
+    const readyAt = approvedAt + timeLock;
+    if (now >= readyAt) return null;
+    return `the ${timeLock}s timelock ends at ${new Date(readyAt * 1000).toISOString()} (${readyAt - now}s from now). ` +
+      "Run this again then to execute.";
+  };
+  let wait = await timelockWait();
+  if (wait) return console.log(`\nApproved; ${wait}`);
   console.log("\nThe proposal is approved and can be executed.");
   if ((await ask(["execute"])) !== "execute") return console.log("Not executed.");
+  wait = await timelockWait();
+  if (wait) return console.log(`Not executed: the timelock changed while you were deciding; ${wait}`);
   await execute(index, decoded);
 }
 
