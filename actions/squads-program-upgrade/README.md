@@ -85,10 +85,15 @@ Each member needs a funded devnet keypair: a little SOL pays fees, and about 0.0
 ### Approving an upgrade
 
 1. Run the workflow without `dry_run`. Its job summary shows the proposal number and the **executable hash** of the build.
-2. Each member reviews it and votes:
+2. Each member lists open proposals. For an upgrade, `list` shows the buffer's hash, the commit it was built from, and the exact command to review and vote:
 
    ```sh
    node approve.mjs --multisig <MULTISIG> --keypair ~/keys/me.json list
+   ```
+
+   **Compare that hash with the executable hash in the CI job summary for the same commit.** That comparison is the check: the printed hash belongs to the buffer itself, so on its own it proves nothing. If they match, run the printed command:
+
+   ```sh
    node approve.mjs --multisig <MULTISIG> --keypair ~/keys/me.json <#> --hash <executable hash>
    ```
 

@@ -236,9 +236,9 @@ async function decodeVault(vaultTx) {
         lines.push(`${i}. otter-verify: UNKNOWN instruction, review manually`);
         continue;
       }
-      verifies.push({ i, kind, pda, authority, target });
-      if (kind === "close") others.push(i);
       const p = kind === "close" ? null : decodeVerifyParams(data);
+      verifies.push({ i, kind, pda, authority, target, gitUrl: p?.gitUrl, commit: p?.commit });
+      if (kind === "close") others.push(i);
       if (kind !== "close" && !p) problems.push(`instruction ${i}: malformed otter-verify ${kind} payload`);
       lines.push(`${i}. VERIFY PDA ${kind.toUpperCase()} for program ${target}` +
         (p ? `: ${p.gitUrl} @ ${p.commit}, args [${p.args.join(" ")}], solana-verify ${p.version}` : ""));
@@ -277,7 +277,7 @@ async function decodeVault(vaultTx) {
       problems.push(`instruction ${v.i}: verify record address ${v.pda} is not the PDA for ${v.target}`);
     }
   }
-  return { kind: "vault", lines, upgrades, problems };
+  return { kind: "vault", lines, upgrades, verifies, problems };
 }
 
 function decodeConfig(configTx) {
@@ -422,15 +422,33 @@ async function list() {
     const proposal = await proposalAt(index);
     const status = proposal?.status.__kind;
     if (status !== "Active" && status !== "Approved") continue;
+    let decoded;
     let summary;
     try {
-      const decoded = await decode(index);
+      decoded = await decode(index);
       summary = decoded.lines.slice(1).find((l) => /^\d+\. [A-Z]/.test(l)) ?? decoded.lines[0];
     } catch (err) {
       summary = `could not decode (${err.message}); review it before voting`;
     }
     console.log(`\n#${index} ${status}, ${votes(proposal)}\n  ${summary}`);
     open++;
+
+    // For upgrades, show what to compare and the command to run. The hash is
+    // the buffer's own, so it proves nothing until you match it against the
+    // CI job summary: that comparison is the check.
+    for (const { hash, programId } of decoded?.upgrades ?? []) {
+      const source = decoded.verifies?.find((v) => v.target === programId && v.commit);
+      console.log(`     buffer hash ${hash}` + (source ? ` (built from ${source.commit.slice(0, 7)})` : ""));
+      if (decoded.problems.length) {
+        console.log(`     review shows problems: ${decoded.problems.join("; ")}`);
+        continue;
+      }
+      console.log(`     Compare with the executable hash in the CI job summary` +
+        (source ? ` for ${source.gitUrl.replace(/^https:\/\/github\.com\//, "")}@${source.commit.slice(0, 7)}` : "") +
+        "; if they match:");
+      console.log(`     node approve.mjs --multisig ${multisigPda.toBase58()} --keypair ${opts.keypair ?? "<your keypair>"} ` +
+        `${index} --hash ${hash}`);
+    }
   }
   if (!open) console.log("\nNo open proposals.");
 }
