@@ -155,7 +155,9 @@ if (answer !== "propose") {
 if ((await connection.getBalance(signer.publicKey)) < 10_000_000) {
   fail(`${signer.publicKey.toBase58()} needs ~0.01 SOL to pay the proposal rent and fees`);
 }
-const transactionIndex = BigInt(ms.transactionIndex.toString()) + 1n;
+// Read the index only now: another member may have proposed while we waited.
+const latestMs = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+const transactionIndex = BigInt(latestMs.transactionIndex.toString()) + 1n;
 const latest = await connection.getLatestBlockhash();
 const tx = new VersionedTransaction(new TransactionMessage({
   payerKey: signer.publicKey,

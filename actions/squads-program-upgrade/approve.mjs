@@ -222,12 +222,17 @@ async function proposalAt(index) {
 
 // --- signing ----------------------------------------------------------------
 
-async function send(instructions, label, lookupTables = []) {
+// Votes are cheap. Executing replays the proposal, so it gets the same ceiling
+// the workflow simulated the upgrade with.
+const VOTE_UNITS = 200_000;
+const EXECUTE_UNITS = 1_400_000;
+
+async function send(instructions, label, { units = VOTE_UNITS, lookupTables = [] } = {}) {
   const latest = await connection.getLatestBlockhash();
   const tx = new VersionedTransaction(new TransactionMessage({
     payerKey: signer.publicKey,
     recentBlockhash: latest.blockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...instructions],
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units }), ...instructions],
   }).compileToV0Message(lookupTables));
   tx.sign([signer]);
   let signature;
@@ -275,12 +280,12 @@ async function execute(index, decoded) {
         : a.__kind === "RemoveSpendingLimit" ? [a.spendingLimit] : []);
     await send([multisig.instructions.configTransactionExecute({
       multisigPda, transactionIndex: index, member: signer.publicKey, rentPayer: signer.publicKey, spendingLimits,
-    })], "executed");
+    })], "executed", { units: EXECUTE_UNITS });
   } else {
     const { instruction, lookupTableAccounts } = await multisig.instructions.vaultTransactionExecute({
       connection, multisigPda, transactionIndex: index, member: signer.publicKey,
     });
-    await send([instruction], "executed", lookupTableAccounts);
+    await send([instruction], "executed", { units: EXECUTE_UNITS, lookupTables: lookupTableAccounts });
   }
 }
 
@@ -369,6 +374,16 @@ async function review(index) {
     return;
   }
   if (problems.length) fail("not executing while the problems above remain");
+
+  // An approved proposal only becomes executable once the timelock has passed.
+  const approvedAt = Number((await proposalAt(index)).status.timestamp);
+  const now = await connection.getBlockTime(await connection.getSlot());
+  const readyAt = approvedAt + ms.timeLock;
+  if (now < readyAt) {
+    console.log(`\nApproved; the ${ms.timeLock}s timelock ends at ${new Date(readyAt * 1000).toISOString()} ` +
+      `(${readyAt - now}s from now). Run this again then to execute.`);
+    return;
+  }
   console.log("\nThe proposal is approved and can be executed.");
   if ((await ask(["execute"])) !== "execute") return console.log("Not executed.");
   await execute(index, decoded);
