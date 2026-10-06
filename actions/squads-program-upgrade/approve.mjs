@@ -29,6 +29,12 @@ const OTTER_VERIFY = "verifycLy8mB96wd9wqq3WDXQwM4oU6r42Th37Db9fC";
 const COMPUTE_BUDGET = ComputeBudgetProgram.programId.toBase58();
 const BUFFER_HEADER = 37; // u32 tag + Option<Pubkey>
 const PERMISSIONS = { Initiate: 1, Vote: 2, Execute: 4 };
+// otter-verify Anchor discriminators, as used by solana-verify.
+const VERIFY_KINDS = {
+  "afaf6d1f0d989bed": "initialize",
+  "dbc858b09e3ffd7f": "update",
+  "62a5c9b16c41ce60": "close",
+};
 
 const USAGE = `Usage:
   node approve.mjs --multisig <pda> [--keypair <path>] [--rpc <url>] list
@@ -153,6 +159,7 @@ async function decodeVault(vaultTx) {
   const keys = await resolveKeys(msg);
   const lines = [`vault ${vaultTx.vaultIndex} transaction by ${vaultTx.creator.toBase58()}`];
   const upgrades = [];
+  const verifies = [];
   const problems = [];
   if (msg.addressTableLookups.length) {
     lines.push(`uses ${msg.addressTableLookups.length} address lookup table(s), resolved below`);
@@ -177,21 +184,53 @@ async function decodeVault(vaultTx) {
         continue;
       }
       const hash = bufferHash(account.data);
-      upgrades.push({ buffer, hash });
+      upgrades.push({ buffer, hash, programId });
       lines.push(`   buffer hash ${hash}`);
     } else if (program === LOADER && tag === 4) {
       lines.push(`${i}. SET AUTHORITY of ${accounts[0]} -> ${accounts[2] ?? "none (makes it immutable)"}`);
     } else if (program === LOADER && tag === 6) {
       lines.push(`${i}. EXTEND program ${accounts[1]} by ${data.readUInt32LE(4)} bytes`);
     } else if (program === OTTER_VERIFY) {
-      const p = decodeVerifyParams(data);
-      lines.push(p
-        ? `${i}. VERIFY PDA write: ${p.gitUrl} @ ${p.commit}, args [${p.args.join(" ")}], solana-verify ${p.version}`
-        : `${i}. VERIFY PDA write (${data.length} bytes, not decoded)`);
+      const kind = VERIFY_KINDS[data.subarray(0, 8).toString("hex")];
+      const [pda, authority, target] = accounts;
+      if (!kind) {
+        problems.push(`instruction ${i}: unknown otter-verify instruction`);
+        lines.push(`${i}. otter-verify: UNKNOWN instruction, review manually`);
+        continue;
+      }
+      verifies.push({ i, kind, pda, authority, target });
+      const p = kind === "close" ? null : decodeVerifyParams(data);
+      lines.push(`${i}. VERIFY PDA ${kind.toUpperCase()} for program ${target}` +
+        (p ? `: ${p.gitUrl} @ ${p.commit}, args [${p.args.join(" ")}], solana-verify ${p.version}` : ""));
     } else if (program === COMPUTE_BUDGET) {
       lines.push(`${i}. compute budget`);
     } else {
       lines.push(`${i}. ${program}: ${data.length} bytes of data, ${accounts.length} accounts; NOT DECODED, review manually`);
+    }
+  }
+  // A verification record must describe a program this proposal upgrades,
+  // written by this vault at the address otter-verify derives for that pair.
+  const [vault] = multisig.getVaultPda({ multisigPda, index: vaultTx.vaultIndex });
+  const upgraded = new Set(upgrades.map((u) => u.programId));
+  for (const v of verifies) {
+    if (v.kind === "close") continue;
+    if (upgrades.length && !upgraded.has(v.target)) {
+      problems.push(`instruction ${v.i}: verify record targets ${v.target}, which this proposal does not upgrade`);
+    }
+    if (v.authority !== vault.toBase58()) {
+      problems.push(`instruction ${v.i}: verify record signed by ${v.authority}, not the vault ${vault.toBase58()}`);
+    }
+    let expected = null;
+    try {
+      [expected] = PublicKey.findProgramAddressSync(
+        [Buffer.from("otter_verify"), new PublicKey(v.authority).toBuffer(), new PublicKey(v.target).toBuffer()],
+        new PublicKey(OTTER_VERIFY),
+      );
+    } catch {
+      // unresolved lookup-table placeholder: already reported
+    }
+    if (!expected || expected.toBase58() !== v.pda) {
+      problems.push(`instruction ${v.i}: verify record address ${v.pda} is not the PDA for ${v.target}`);
     }
   }
   return { kind: "vault", lines, upgrades, problems };
@@ -395,11 +434,13 @@ async function review(index) {
   if (problems.length) fail("not executing while the problems above remain");
 
   // An approved proposal only becomes executable once the timelock has passed.
+  // Squads checks the timelock current at execution, so read it fresh.
+  const { timeLock } = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda, "confirmed");
   const approvedAt = Number((await proposalAt(index)).status.timestamp);
   const now = await connection.getBlockTime(await connection.getSlot());
-  const readyAt = approvedAt + ms.timeLock;
+  const readyAt = approvedAt + timeLock;
   if (now < readyAt) {
-    console.log(`\nApproved; the ${ms.timeLock}s timelock ends at ${new Date(readyAt * 1000).toISOString()} ` +
+    console.log(`\nApproved; the ${timeLock}s timelock ends at ${new Date(readyAt * 1000).toISOString()} ` +
       `(${readyAt - now}s from now). Run this again then to execute.`);
     return;
   }
