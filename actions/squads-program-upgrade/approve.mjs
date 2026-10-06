@@ -104,6 +104,8 @@ function bufferHash(data) {
 
 // otter-verify initialize/update: 8-byte discriminator, then Borsh
 // { version: String, git_url: String, commit: String, args: Vec<String>, deployed_slot: u64 }.
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
 function decodeVerifyParams(data) {
   let offset = 8;
   const take = (n) => {
@@ -113,7 +115,7 @@ function decodeVerifyParams(data) {
   };
   const string = () => {
     const length = data.readUInt32LE(take(4));
-    return data.toString("utf8", take(length), offset);
+    return UTF8.decode(data.subarray(take(length), offset)); // throws on invalid UTF-8, as Borsh does
   };
   try {
     const version = string();
@@ -134,13 +136,16 @@ async function decode(index) {
   const info = await connection.getAccountInfo(transactionPda);
   if (!info) return { kind: "missing", lines: ["transaction account closed or never created"], upgrades: [], problems: [] };
 
+  // Pick the account type first, so an error while decoding a vault
+  // transaction surfaces as such rather than as a failed config parse.
+  let vaultTx;
   try {
-    const [vaultTx] = multisig.accounts.VaultTransaction.fromAccountInfo(info);
-    return await decodeVault(vaultTx);
+    [vaultTx] = multisig.accounts.VaultTransaction.fromAccountInfo(info);
   } catch {
     const [configTx] = multisig.accounts.ConfigTransaction.fromAccountInfo(info);
     return decodeConfig(configTx);
   }
+  return decodeVault(vaultTx);
 }
 
 // Account keys in v0 order: static keys, then every table's writable entries,
@@ -159,6 +164,7 @@ async function resolveKeys(msg) {
 
 async function decodeVault(vaultTx) {
   const msg = vaultTx.message;
+  const [vault] = multisig.getVaultPda({ multisigPda, index: vaultTx.vaultIndex });
   const keys = await resolveKeys(msg);
   const lines = [`vault ${vaultTx.vaultIndex} transaction by ${vaultTx.creator.toBase58()}`];
   const upgrades = [];
@@ -175,17 +181,36 @@ async function decodeVault(vaultTx) {
     const tag = data.length >= 4 ? data.readUInt32LE(0) : -1;
 
     if (program === LOADER && tag === 3) {
+      if (accounts.length < 7) {
+        problems.push(`instruction ${i}: malformed loader Upgrade (${accounts.length} accounts, expected 7)`);
+        lines.push(`${i}. UPGRADE: MALFORMED, review manually`);
+        continue;
+      }
       const [, programId, buffer, spill] = accounts;
       lines.push(`${i}. UPGRADE program ${programId}`, `   buffer ${buffer}, lamports refunded to ${spill}`);
       if (buffer.startsWith("lookup#")) {
         problems.push(`upgrade buffer ${buffer} could not be resolved`);
         continue;
       }
-      const account = await connection.getAccountInfo(new PublicKey(buffer));
+      const account = await connection.getAccountInfo(new PublicKey(buffer), "confirmed");
       if (!account) {
         problems.push(`buffer ${buffer} does not exist`);
         continue;
       }
+      // The hash only means something if nobody but the vault can rewrite the
+      // buffer: it must be a loader Buffer whose authority is already the vault.
+      const isBuffer = account.owner.toBase58() === LOADER && account.data.length >= BUFFER_HEADER &&
+        account.data.readUInt32LE(0) === 1;
+      const authority = isBuffer && account.data[4] === 1 ? new PublicKey(account.data.subarray(5, 37)) : null;
+      if (!isBuffer) {
+        problems.push(`${buffer} is not a loader buffer`);
+        continue;
+      }
+      if (!authority?.equals(vault)) {
+        problems.push(`buffer authority is ${authority?.toBase58() ?? "none"}, not the vault ${vault.toBase58()}: ` +
+          "its contents could still change after review");
+      }
+      lines.push(`   buffer authority ${authority?.toBase58() ?? "none"}`);
       const hash = bufferHash(account.data);
       upgrades.push({ buffer, hash, programId });
       lines.push(`   buffer hash ${hash}`);
@@ -214,7 +239,6 @@ async function decodeVault(vaultTx) {
   }
   // A verification record must describe a program this proposal upgrades,
   // written by this vault at the address otter-verify derives for that pair.
-  const [vault] = multisig.getVaultPda({ multisigPda, index: vaultTx.vaultIndex });
   const upgraded = new Set(upgrades.map((u) => u.programId));
   for (const v of verifies) {
     if (v.kind === "close") continue;
@@ -375,12 +399,30 @@ async function list() {
     const proposal = await proposalAt(index);
     const status = proposal?.status.__kind;
     if (status !== "Active" && status !== "Approved") continue;
-    const decoded = await decode(index);
-    const summary = decoded.lines.slice(1).find((l) => /^\d+\. [A-Z]/.test(l)) ?? decoded.lines[0];
+    let summary;
+    try {
+      const decoded = await decode(index);
+      summary = decoded.lines.slice(1).find((l) => /^\d+\. [A-Z]/.test(l)) ?? decoded.lines[0];
+    } catch (err) {
+      summary = `could not decode (${err.message}); review it before voting`;
+    }
     console.log(`\n#${index} ${status}, ${votes(proposal)}\n  ${summary}`);
     open++;
   }
   if (!open) console.log("\nNo open proposals.");
+}
+
+// Every upgrade must match the CI build unless the check is waived explicitly.
+function assess(decoded) {
+  const problems = [...decoded.problems];
+  for (const { hash } of decoded.upgrades) {
+    if (opts.hash) {
+      if (hash !== opts.hash) problems.push(`buffer hash ${hash} does not match --hash ${opts.hash}`);
+    } else if (!opts["no-hash-check"]) {
+      problems.push("upgrade without --hash: pass the executable hash from the CI job summary (or --no-hash-check)");
+    }
+  }
+  return problems;
 }
 
 async function review(index) {
@@ -393,16 +435,8 @@ async function review(index) {
   console.log(`\n#${index}: ${proposal ? `${proposal.status.__kind}, ${votes(proposal)}` : "no proposal"}`);
   for (const line of decoded.lines) console.log(`  ${line}`);
 
-  // Every upgrade must match the CI build unless the check is waived explicitly.
-  const problems = [...decoded.problems];
-  for (const { hash } of decoded.upgrades) {
-    if (opts.hash) {
-      if (hash !== opts.hash) problems.push(`buffer hash ${hash} does not match --hash ${opts.hash}`);
-      else console.log(`  buffer hash matches the CI build`);
-    } else if (!opts["no-hash-check"]) {
-      problems.push("upgrade without --hash: pass the executable hash from the CI job summary (or --no-hash-check)");
-    }
-  }
+  const problems = assess(decoded);
+  if (opts.hash && decoded.upgrades.length && !problems.length) console.log("  buffer hash matches the CI build");
   for (const p of problems) console.log(`  PROBLEM: ${p}`);
 
   const status = proposal?.status.__kind;
@@ -455,7 +489,11 @@ async function review(index) {
   if ((await ask(["execute"])) !== "execute") return console.log("Not executed.");
   wait = await timelockWait();
   if (wait) return console.log(`Not executed: the timelock changed while you were deciding; ${wait}`);
-  await execute(index, decoded);
+  // Decode and check again right before sending: what executes is what was just checked.
+  const latest = await decode(index);
+  const latestProblems = assess(latest);
+  if (latestProblems.length) fail(`not executed; the proposal no longer passes review:\n  ${latestProblems.join("\n  ")}`);
+  await execute(index, latest);
 }
 
 const [command] = positionals;
