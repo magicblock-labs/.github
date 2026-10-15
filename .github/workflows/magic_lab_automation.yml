@@ -22,15 +22,102 @@ jobs:
     if: >-
       github.event.action == 'opened' ||
       github.event.action == 'reopened' ||
-      github.event.action == 'transferred' ||
-      github.event.action == 'labeled'
+      github.event.action == 'transferred'
     runs-on: ubuntu-latest
+    concurrency:
+      group: magic-lab-add-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - name: Add item to Magic Lab
-        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
-          project-url: ${{ env.PROJECT_URL }}
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          script: |
+            const item = context.payload.issue ?? context.payload.pull_request;
+            const projectUrl = new URL(process.env.PROJECT_URL);
+            const [, , owner, , number] = projectUrl.pathname.split('/');
+            const result = await github.graphql(`
+              query($owner: String!, $number: Int!) {
+                organization(login: $owner) {
+                  projectV2(number: $number) { id }
+                }
+              }
+            `, { owner, number: Number(number) });
+            const projectId = result.organization.projectV2.id;
+
+            async function findProjectItem() {
+              let cursor = null;
+              do {
+                const result = await github.graphql(`
+                  query($id: ID!, $cursor: String) {
+                    node(id: $id) {
+                      ... on Issue {
+                        projectItems(first: 100, after: $cursor, includeArchived: true) {
+                          nodes { id project { id } }
+                          pageInfo { hasNextPage endCursor }
+                        }
+                      }
+                      ... on PullRequest {
+                        projectItems(first: 100, after: $cursor, includeArchived: true) {
+                          nodes { id project { id } }
+                          pageInfo { hasNextPage endCursor }
+                        }
+                      }
+                    }
+                  }
+                `, { id: item.node_id, cursor });
+                const items = result.node.projectItems;
+                const existing = items.nodes.find(entry => entry.project.id === projectId);
+                if (existing) return existing.id;
+                if (!items.pageInfo.hasNextPage) return null;
+                cursor = items.pageInfo.endCursor;
+              } while (cursor);
+              return null;
+            }
+
+            // Other repositories and native project automations can still race
+            // with this job: concurrency groups only coordinate this repository.
+            const maxAttempts = 5;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              const existing = await findProjectItem();
+              if (existing) {
+                core.info('Item is already in Magic Lab');
+                core.setOutput('itemId', existing);
+                return;
+              }
+
+              try {
+                const result = await github.graphql(`
+                  mutation($projectId: ID!, $contentId: ID!) {
+                    addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                      item { id }
+                    }
+                  }
+                `, { projectId, contentId: item.node_id });
+                core.setOutput('itemId', result.addProjectV2ItemById.item.id);
+                core.info('Added item to Magic Lab');
+                return;
+              } catch (error) {
+                const errors = error.errors ?? [{ message: error.message }];
+                const conflict = errors.length > 0 && errors.every(entry =>
+                  /content already exists in this project|concurrent project modification/i.test(entry.message)
+                );
+                if (!conflict) throw error;
+
+                // A competing writer may have succeeded. Confirm membership
+                // before treating a duplicate response as success.
+                const existing = await findProjectItem();
+                if (existing) {
+                  core.info('Item was added to Magic Lab by another operation');
+                  core.setOutput('itemId', existing);
+                  return;
+                }
+                if (attempt === maxAttempts) throw error;
+                const delay = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 1000);
+                core.warning(`Project modification conflict; retrying in ${delay} ms (${attempt}/${maxAttempts})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+              }
+            }
 
   assign-author:
     name: Assign unassigned item to its author
