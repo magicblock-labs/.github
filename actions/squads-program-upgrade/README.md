@@ -142,4 +142,4 @@ Never give the CI key Vote or Execute. With them, anyone who can run the workflo
 
 - **Vault funding.** The vault pays about 0.003 SOL of rent the first time the otter-verify PDA is written. If it can't, the simulation fails and the error names the vault.
 - **Program size.** A binary larger than the current allocation needs a separate extend proposal first. The error states how many bytes.
-- **Verify PDA.** The PDA records the repository, commit, library name and base image used for the build, so `solana-verify remote submit-job` rebuilds the same binary. Remote verification is mainnet-only; on other clusters the PDA is written but not checked by OtterSec. Set `write-verify-pda: false` to skip it.
+- **Verify PDA.** The PDA records the repository, commit, library name and base image used for the build, so OtterSec can rebuild the same binary. After members execute the upgrade, run [`verify-program-remote`](../verify-program-remote) to get the program marked verified. Remote verification is mainnet-only; on other clusters the PDA is written but not checked by OtterSec. Set `write-verify-pda: false` to skip it.
