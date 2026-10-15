@@ -1,0 +1,149 @@
+name: Verify Program (Remote)
+description: >-
+  Ask OtterSec to rebuild a mainnet Solana program from its otter-verify PDA,
+  and fail unless the rebuild matches the deployed binary. Run it after an
+  upgrade from squads-program-upgrade executes.
+
+inputs:
+  program-id:
+    description: Mainnet program to verify.
+    required: true
+  rpc-url:
+    description: >-
+      Mainnet RPC endpoint. Only public accounts are read, so the public
+      endpoint works; pass a secret to use a private one.
+    default: https://api.mainnet-beta.solana.com
+  uploader:
+    description: Signer of the otter-verify PDA. Defaults to the program's upgrade authority.
+    default: ""
+  solana-verify-version:
+    description: solana-verify release.
+    default: 0.4.15
+
+outputs:
+  uploader:
+    description: Signer whose otter-verify PDA OtterSec rebuilt from.
+    value: ${{ steps.uploader.outputs.address }}
+  program-hash:
+    description: solana-verify hash of the deployed program, matched by OtterSec's rebuild.
+    value: ${{ steps.check.outputs.program-hash }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        SOLANA_VERIFY_VERSION: ${{ inputs.solana-verify-version }}
+      run: |
+        echo "::add-mask::$RPC_URL"
+        : "${RPC_URL:?rpc-url is empty}"
+
+        BASE="https://github.com/solana-foundation/solana-verifiable-build/releases/download/v${SOLANA_VERIFY_VERSION}"
+        curl -sSfL "$BASE/solana-verify-${SOLANA_VERIFY_VERSION}-linux" -o "$RUNNER_TEMP/solana-verify"
+        curl -sSfL "$BASE/solana-verify-${SOLANA_VERIFY_VERSION}-linux.sha256" -o "$RUNNER_TEMP/solana-verify.sha256"
+        (cd "$RUNNER_TEMP" && awk '{print $1"  solana-verify"}' solana-verify.sha256 | sha256sum -c -)
+        sudo install -m 755 "$RUNNER_TEMP/solana-verify" /usr/local/bin/solana-verify
+
+    - name: Resolve uploader
+      id: uploader
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+        UPLOADER: ${{ inputs.uploader }}
+      run: |
+        # OtterSec trusts the PDA written by the upgrade authority, so read the
+        # authority straight from the program's accounts.
+        parsed() {
+          jq -nc --arg address "$1" \
+            '{jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [$address, {encoding: "jsonParsed"}]}' \
+            | curl -sSf "$RPC_URL" -H 'Content-Type: application/json' -d @- \
+            | jq -c 'if .error then error("RPC error: \(.error.message)") else (.result.value.data.parsed? // empty) end'
+        }
+
+        if [ -z "$UPLOADER" ]; then
+          PROGRAM_DATA=$(parsed "$PROGRAM_ID" | jq -r 'select(.type == "program") | .info.programData')
+          if [ -z "$PROGRAM_DATA" ]; then
+            echo "::error::$PROGRAM_ID is not an upgradeable program on this cluster"
+            exit 1
+          fi
+          UPLOADER=$(parsed "$PROGRAM_DATA" | jq -r '.info.authority // empty')
+          if [ -z "$UPLOADER" ]; then
+            echo "::error::$PROGRAM_ID has no upgrade authority. Set uploader to the key that wrote its verify PDA."
+            exit 1
+          fi
+        fi
+        echo "address=$UPLOADER" | tee -a "$GITHUB_OUTPUT"
+
+    - name: Submit verification job
+      id: submit
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+        UPLOADER: ${{ steps.uploader.outputs.address }}
+      run: |
+        # Waits for OtterSec's rebuild, but exits 0 even when the rebuild fails
+        # or doesn't match. The next step checks the result.
+        solana-verify --url "$RPC_URL" remote submit-job \
+          --program-id "$PROGRAM_ID" \
+          --uploader "$UPLOADER" \
+          | tee "$RUNNER_TEMP/submit-job.log"
+
+        echo "job-url=$(awk '/^Job url:/ {print $3; exit}' "$RUNNER_TEMP/submit-job.log")" >> "$GITHUB_OUTPUT"
+
+    - name: Check result
+      id: check
+      shell: bash
+      env:
+        RPC_URL: ${{ inputs.rpc-url }}
+        PROGRAM_ID: ${{ inputs.program-id }}
+        UPLOADER: ${{ steps.uploader.outputs.address }}
+      run: |
+        # Verified means OtterSec rebuilt the binary deployed right now from
+        # this uploader's PDA. A record left from an earlier upgrade doesn't count.
+        HASH=$(solana-verify --url "$RPC_URL" get-program-hash "$PROGRAM_ID" | tail -n1)
+        RECORD=$(curl -sSf "https://verify.osec.io/status-all/$PROGRAM_ID" \
+          | jq -c --arg signer "$UPLOADER" 'map(select(.signer == $signer)) | first // {}')
+        {
+          echo "program-hash=$HASH"
+          echo "source=$(jq -r '.repo_url // empty' <<< "$RECORD")"
+        } | tee -a "$GITHUB_OUTPUT"
+
+        if ! jq -e --arg hash "$HASH" \
+          '.is_verified == true and .on_chain_hash == $hash and .executable_hash == $hash' \
+          <<< "$RECORD" > /dev/null; then
+          echo "::error::OtterSec has not verified the deployed binary $HASH. Its record for $UPLOADER: $RECORD"
+          exit 1
+        fi
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        PROGRAM_ID: ${{ inputs.program-id }}
+        UPLOADER: ${{ steps.uploader.outputs.address }}
+        HASH: ${{ steps.check.outputs.program-hash }}
+        SOURCE: ${{ steps.check.outputs.source }}
+        JOB_URL: ${{ steps.submit.outputs.job-url }}
+        OUTCOME: ${{ steps.check.outcome }}
+      run: |
+        {
+          if [ "$OUTCOME" = success ]; then echo "### Verified by OtterSec"
+          else echo "### Not verified"; fi
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Program | \`$PROGRAM_ID\` |"
+          echo "| Uploader | \`${UPLOADER:-?}\` |"
+          echo "| Deployed hash | \`${HASH:-?}\` |"
+          echo "| Source | ${SOURCE:-?} |"
+          echo
+          echo "Status: https://verify.osec.io/status/$PROGRAM_ID"
+          if [ -n "$JOB_URL" ]; then
+            echo
+            echo "Job: $JOB_URL"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
