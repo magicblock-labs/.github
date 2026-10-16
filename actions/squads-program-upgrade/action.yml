@@ -156,17 +156,27 @@ runs:
         EXPECTED_HASH: ${{ steps.build.outputs.executable-hash }}
         COMPUTE_UNIT_PRICE: ${{ inputs.compute-unit-price }}
       run: |
-        solana program write-buffer "$SO" \
-          --url "$RPC_URL" \
-          --keypair "$PROPOSER_KEYPAIR_PATH" \
-          --use-rpc \
-          --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
-          --max-sign-attempts 50 \
-          | tee "$RUNNER_TEMP/buffer.log"
-
-        BUFFER=$(awk '/^Buffer:/ {print $2; exit}' "$RUNNER_TEMP/buffer.log")
-        : "${BUFFER:?could not parse the buffer address}"
+        # A buffer keypair made up front fixes the address before anything is
+        # sent, so a failed upload can be resumed or closed.
+        BUFFER_KEYPAIR="$RUNNER_TEMP/buffer.json"
+        solana-keygen new --silent --no-bip39-passphrase --outfile "$BUFFER_KEYPAIR"
+        BUFFER=$(solana-keygen pubkey "$BUFFER_KEYPAIR")
         echo "address=$BUFFER" >> "$GITHUB_OUTPUT"
+
+        # A load-balanced RPC can simulate the first write on a node that does
+        # not see the new buffer yet. A retry resumes, writing only what's missing.
+        for attempt in 1 2 3; do
+          solana program write-buffer "$SO" \
+            --url "$RPC_URL" \
+            --keypair "$PROPOSER_KEYPAIR_PATH" \
+            --buffer "$BUFFER_KEYPAIR" \
+            --use-rpc \
+            --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
+            --max-sign-attempts 50 && break
+          [ "$attempt" -lt 3 ] || exit 1
+          echo "::warning::Upload attempt $attempt failed; resuming in 10s"
+          sleep 10
+        done
 
         # solana-verify reads at finalized commitment, which trails the upload:
         # the buffer first reads as missing, then empty, then complete.
@@ -214,10 +224,19 @@ runs:
         RPC_URL: ${{ inputs.rpc-url }}
         BUFFER: ${{ steps.buffer.outputs.address }}
       run: |
-        solana program close "$BUFFER" \
-          --url "$RPC_URL" \
-          --keypair "$PROPOSER_KEYPAIR_PATH" \
-          --bypass-warning
+        # The upload may have failed before creating the buffer, and reads can
+        # lag behind one created moments ago, so look more than once.
+        for _ in 1 2 3; do
+          if solana account "$BUFFER" --url "$RPC_URL" > /dev/null 2>&1; then
+            solana program close "$BUFFER" \
+              --url "$RPC_URL" \
+              --keypair "$PROPOSER_KEYPAIR_PATH" \
+              --bypass-warning
+            exit
+          fi
+          sleep 5
+        done
+        echo "No buffer at $BUFFER to close"
 
     - name: Summary
       if: always()
