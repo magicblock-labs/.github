@@ -8,7 +8,7 @@ Opens a Squads v4 proposal that upgrades a Solana program from a verifiable buil
 4. **Simulate** the exact bundle the vault will execute: buffer handover, `Upgrade`, and the otter-verify PDA write. This includes the rent the vault pays on first verification.
 5. Only then **propose**: hand the buffer to the vault, then `vaultTransactionCreate` and `proposalCreate` in one transaction.
 
-Members approve and execute in Squads, or on devnet with the bundled [command-line tools](#approving-and-managing-the-multisig-devnet). Upgrade and verification land atomically. If anything fails before the handover, the buffer is closed and its rent returned.
+Members approve and execute in Squads, or on devnet with the [approval page](#approving-in-the-browser) or the bundled [command-line tools](#approving-and-managing-the-multisig-devnet). Upgrade and verification land atomically. If anything fails before the handover, the buffer is closed and its rent returned.
 
 ## Usage
 
@@ -62,14 +62,23 @@ See [`action.yml`](action.yml) for every input and output. Start each new setup 
 
 ## Approving and managing the multisig (devnet)
 
-On mainnet, members approve in the [Squads app](https://app.squads.so). Devnet has no app, so this folder ships two command-line tools that members run **on their own machine with their own keypair**:
+On mainnet, members approve in the [Squads app](https://app.squads.so). Devnet has no app, so this folder ships a web page and two command-line tools, all signing **with the member's own key**:
 
-| Script | Does |
+| Tool | Does |
 |---|---|
-| `approve.mjs` | lists open proposals, decodes one, then approves, rejects or executes it |
+| [approval page](https://magicblock-labs.github.io/.github/) (`web/`) | lists open proposals, decodes them, then approves, rejects or executes with a browser wallet |
+| `approve.mjs` | the same from a terminal, with a keypair file |
 | `configure.mjs` | proposes adding or removing members, or changing the threshold or timelock |
 
-Both refuse any cluster but devnet, refuse to run in CI (so voting keys never sit in a workflow), and sign nothing until you type the action word.
+All three refuse any cluster but devnet and share one decoder (`review.mjs`), so they accept and refuse the same proposals. The scripts refuse to run in CI (so voting keys never sit in a workflow) and sign nothing until you type the action word.
+
+### Approving in the browser
+
+Open **https://magicblock-labs.github.io/.github/** and connect a wallet extension (Phantom, Solflare, Backpack, …) that holds your member key and is set to devnet (Phantom: *Testnet Mode* in Developer Settings). It needs a little devnet SOL for fees.
+
+For an upgrade, the page fetches the executable hash that the workflow recorded for that exact buffer and compares it with the buffer: Approve stays disabled until they match. Runs from action versions before the page don't leave that record, so for those, paste the hash from the job summary. When your approval reaches the threshold and there is no timelock, **Approve + execute** does both in one transaction. Every transaction is simulated, signature included, before it is sent.
+
+The page uses `https://rpc.magicblock.app/devnet` and the MagicBlock upgrade multisig by default. Other devnet RPCs and multisigs can be added under *Settings* and are remembered by your browser only. Open proposals with no activity in 30 days are hidden; `approve.mjs list` still shows them. To work on the page: `npm ci && npm run dev:web`.
 
 ### Setup (once per member)
 
@@ -84,7 +93,7 @@ Each member needs a funded devnet keypair: a little SOL pays fees, and about 0.0
 
 ### Approving an upgrade
 
-1. Run the workflow without `dry_run`. Its job summary shows the proposal number and the **executable hash** of the build.
+1. Run the workflow without `dry_run`. Its job summary shows the proposal number and the **executable hash** of the build, which the run also records as an annotation for the approval page.
 2. Each member lists open proposals. For an upgrade, `list` shows the buffer's hash, the commit it was built from, and the exact command to review and vote:
 
    ```sh

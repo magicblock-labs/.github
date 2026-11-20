@@ -98,7 +98,8 @@ runs:
         sudo install -m 755 "$RUNNER_TEMP/solana-verify" /usr/local/bin/solana-verify
 
         # --ignore-scripts: dependency lifecycle hooks never run next to the keypair.
-        npm ci --prefix "$ACTION_PATH" --ignore-scripts --no-audit --no-fund
+        # --omit=dev: the devnet approval page's build tools aren't needed here.
+        npm ci --prefix "$ACTION_PATH" --omit=dev --ignore-scripts --no-audit --no-fund
 
     - name: Preflight
       id: preflight
@@ -254,6 +255,11 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
         rm -f "$PROPOSER_KEYPAIR_PATH"
+        # A public record of what this run built, matched by buffer address: the
+        # devnet approval page (web/) reads it to check the proposal's buffer.
+        if [ -n "$INDEX" ]; then
+          echo "::notice title=Squads upgrade proposal #$INDEX::buffer=$BUFFER executable-hash=$HASH program=$PROGRAM_ID commit=$COMMIT multisig=$MULTISIG"
+        fi
         {
           if [ -n "$INDEX" ]; then echo "### Squads proposal #$INDEX opened"
           elif [ "$DRY_RUN" = "true" ]; then echo "### Dry run (no proposal)"

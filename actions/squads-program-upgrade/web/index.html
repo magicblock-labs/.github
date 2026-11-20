@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Only this page's own bundle runs. connect-src stays open for any devnet RPC and GitHub's API. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https: wss:; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Squads Devnet Approvals</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Squads approvals</h1>
+      <span class="pill devnet">devnet</span>
+    </div>
+    <div id="wallet" class="wallet"></div>
+  </header>
+
+  <section class="bar">
+    <select id="multisig" aria-label="Multisig"></select>
+    <button id="refresh" type="button" class="quiet">Refresh</button>
+    <button id="remove" type="button" class="quiet" hidden>Remove</button>
+    <details class="settings">
+      <summary>Settings · RPC <span id="rpc-state" class="muted"></span></summary>
+      <form id="add" class="row">
+        <input name="address" class="mono" placeholder="Add a multisig address" autocomplete="off" spellcheck="false" required>
+        <input name="label" placeholder="Label" autocomplete="off">
+        <button type="submit">Add</button>
+      </form>
+      <form id="rpc-form" class="row">
+        <input id="rpc" class="mono" aria-label="RPC URL" autocomplete="off" spellcheck="false">
+        <button type="submit">Use RPC</button>
+        <button id="reset-rpc" type="button" class="quiet">Default</button>
+      </form>
+      <p class="muted small">Proposals are decoded from what the RPC returns, so only use one you trust.</p>
+    </details>
+  </section>
+
+  <div id="status" role="status"></div>
+
+  <main>
+    <section>
+      <h2>Open proposals</h2>
+      <div id="proposals"></div>
+    </section>
+
+    <section>
+      <h2>Members <span id="members-summary" class="muted small"></span></h2>
+      <ul id="members" class="members"></ul>
+    </section>
+  </main>
+
+  <footer class="muted small">
+    Same checks as <code>approve.mjs</code>: every instruction is decoded before you sign, and an upgrade is only
+    approvable when its buffer matches the hash CI built.
+    <a href="https://github.com/magicblock-labs/.github/tree/main/actions/squads-program-upgrade" target="_blank" rel="noopener noreferrer">Source</a>
+  </footer>
+</body>
+</html>
