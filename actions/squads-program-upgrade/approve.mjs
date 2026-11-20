@@ -22,6 +22,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
+import { confirmSignature } from "./confirm.mjs";
 
 const DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 const LOADER = "BPFLoaderUpgradeab1e11111111111111111111111";
@@ -351,8 +352,8 @@ async function send(instructions, label, { units = VOTE_UNITS, lookupTables = []
     const logs = err.transactionLogs ?? err.logs ?? [];
     fail(`${label} rejected: ${err.transactionMessage ?? err.message}${logs.length ? `\n${logs.join("\n")}` : ""}`);
   }
-  const result = await connection.confirmTransaction({ signature, ...latest }, "confirmed");
-  if (result.value.err) fail(`${label} failed (${signature}): ${JSON.stringify(result.value.err)}`);
+  const { err } = await confirmSignature(connection, signature, latest.lastValidBlockHeight);
+  if (err) fail(`${label} failed (${signature}): ${JSON.stringify(err)}`);
   console.log(`${label}: ${signature}`);
 }
 

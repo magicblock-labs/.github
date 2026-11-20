@@ -21,6 +21,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
+import { confirmSignature } from "./confirm.mjs";
 
 const LOADER_ID = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 const COMPUTE_BUDGET_ID = ComputeBudgetProgram.programId.toBase58();
@@ -162,10 +163,8 @@ function serializedSize(instructions) {
 async function send(instructions, label) {
   const { tx, latest } = await buildTx(instructions);
   const signature = await connection.sendTransaction(tx, { maxRetries: 10 });
-  const result = await connection.confirmTransaction({ signature, ...latest }, "confirmed");
-  if (result.value.err) {
-    fail(`${label} failed on-chain (${signature}): ${JSON.stringify(result.value.err)}`);
-  }
+  const { err } = await confirmSignature(connection, signature, latest.lastValidBlockHeight);
+  if (err) fail(`${label} failed on-chain (${signature}): ${JSON.stringify(err)}`);
   console.log(`${label}: ${signature}`);
   return signature;
 }
