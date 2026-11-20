@@ -2,8 +2,17 @@
   "name": "squads-program-upgrade",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build:web": "node web/build.mjs",
+    "dev:web": "node web/build.mjs --serve"
+  },
   "dependencies": {
     "@solana/web3.js": "1.98.4",
     "@sqds/multisig": "2.1.4"
+  },
+  "devDependencies": {
+    "@wallet-standard/app": "1.1.1",
+    "buffer": "6.0.3",
+    "esbuild": "0.28.2"
   }
 }
